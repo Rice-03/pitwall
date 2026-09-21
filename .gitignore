@@ -1,0 +1,15 @@
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# generated data and outputs
+f1_cache/
+plots/
+
+# frontend (later phases)
+node_modules/
+.next/
