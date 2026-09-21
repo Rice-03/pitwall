@@ -46,6 +46,12 @@ def _load(year, race):
     key = (year, race.lower())
     if key not in _sessions:
         s = fastf1.get_session(year, race, "R")
+        # get_session fuzzy-matches, so "Atlantis" silently becomes some other GP.
+        # Insist the name the user gave actually appears in the event it picked.
+        ev = s.event
+        names = [str(ev[c]).lower() for c in ("EventName", "Location", "Country", "OfficialEventName")]
+        if not any(race.lower() in n for n in names):
+            raise ValueError(f"Could not find a race matching '{race}' in {year}.")
         s.load(telemetry=False, weather=False, messages=False)
         _sessions[key] = s
     return _sessions[key]
@@ -94,7 +100,10 @@ def _driver_laps(session, driver):
     laps = session.laps
     laps = laps[laps["Driver"] == driver.upper()]
     if laps.empty:
-        raise ValueError(f"No laps found for driver code {driver.upper()}")
+        drivers = ", ".join(sorted(session.laps["Driver"].dropna().unique()))
+        raise ValueError(
+            f"No laps found for driver code {driver.upper()} in this race. Drivers with laps: {drivers}"
+        )
     return _merge_red_flag_stints(laps, _suspended_windows(session))
 
 
@@ -150,7 +159,11 @@ def fit_degradation(year: int, race: str, driver: str, stint: int) -> dict:
       stint: Stint number as returned by get_stints (1 is the first stint).
     """
     try:
-        laps = _clean(_driver_laps(_load(year, race), driver))
+        all_laps = _driver_laps(_load(year, race), driver)
+        n_stints = int(all_laps["Stint"].max())
+        if not 1 <= stint <= n_stints:
+            return {"error": f"{driver.upper()} has {n_stints} stints, so stint {stint} does not exist."}
+        laps = _clean(all_laps)
         laps = laps[laps["Stint"] == stint]
         if len(laps) < 6:
             return {"error": f"Only {len(laps)} clean laps in that stint, too few to fit."}
