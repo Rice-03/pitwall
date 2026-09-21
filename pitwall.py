@@ -51,12 +51,51 @@ def _load(year, race):
     return _sessions[key]
 
 
+def _suspended_windows(session):
+    """(start, end) session-time windows when the race was red-flagged."""
+    windows, start = [], None
+    for _, row in session.session_status.iterrows():
+        if row["Status"] == "Aborted":
+            start = row["Time"]
+        elif row["Status"] == "Started" and start is not None:
+            windows.append((start, row["Time"]))
+            start = None
+    if start is not None:  # red flag and the race never restarted
+        windows.append((start, pd.Timedelta.max))
+    return windows
+
+
+def _in_windows(t, windows):
+    return pd.notna(t) and any(a <= t <= b for a, b in windows)
+
+
+def _merge_red_flag_stints(laps, windows):
+    """FastF1 starts a new Stint when a car enters the pits under a red flag,
+    even if it keeps the same tyres. Merge those so they are not counted as
+    race stops. A red-flag tyre change (new compound or age reset) stays separate.
+    Also renumbers Stint 1..n."""
+    laps = laps.sort_values("LapNumber").copy()
+    numbers, current, prev = [], 0, None
+    for _, lap in laps.iterrows():
+        if prev is None:
+            current = 1
+        elif lap["Stint"] != prev["Stint"]:
+            red = _in_windows(prev["PitInTime"], windows)
+            same_tyres = lap["Compound"] == prev["Compound"] and lap["TyreLife"] > prev["TyreLife"]
+            if not (red and same_tyres):
+                current += 1
+        numbers.append(current)
+        prev = lap
+    laps["Stint"] = numbers
+    return laps
+
+
 def _driver_laps(session, driver):
     laps = session.laps
     laps = laps[laps["Driver"] == driver.upper()]
     if laps.empty:
         raise ValueError(f"No laps found for driver code {driver.upper()}")
-    return laps
+    return _merge_red_flag_stints(laps, _suspended_windows(session))
 
 
 def _clean(laps):
@@ -164,6 +203,7 @@ def compare_drivers(year: int, race: str, driver_a: str, driver_b: str) -> dict:
     """
     try:
         session = _load(year, race)
+        windows = _suspended_windows(session)
         out = {}
         for d in (driver_a, driver_b):
             d = d.upper()
@@ -171,13 +211,16 @@ def compare_drivers(year: int, race: str, driver_a: str, driver_b: str) -> dict:
             clean = _clean(laps)
             res = session.results
             row = res[res["Abbreviation"] == d]
-            pit_laps = laps.loc[laps["PitInTime"].notna(), "LapNumber"]
+            pit_in = laps[laps["PitInTime"].notna()]
+            red = pit_in["PitInTime"].apply(lambda t: _in_windows(t, windows))
+            pit_laps = pit_in.loc[~red, "LapNumber"]
             out[d] = {
                 "finish_position": _int(row["Position"].iloc[0]) if len(row) else None,
                 "median_clean_lap_s": round(float(clean["LapTime"].dt.total_seconds().median()), 3),
                 "clean_laps": int(len(clean)),
                 "pit_stops": int(len(pit_laps)),
                 "pit_laps": [int(p) for p in pit_laps],
+                "red_flag_pit_laps": [int(p) for p in pit_in.loc[red, "LapNumber"]],
                 "compounds_in_order": [str(c) for c in laps.groupby("Stint")["Compound"].first()],
             }
         a, b = driver_a.upper(), driver_b.upper()
