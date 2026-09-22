@@ -61,7 +61,9 @@ pitwall/
 - `POST /api/chat` takes `{session_id, message}` and returns `{reply, plots, tool_calls}`:
   - `reply`: the assistant text.
   - `plots`: list of `{url, caption}` for any plot the tools produced during this request.
-  - `tool_calls`: list of `{name, args}` so the UI can show "Ran fit_degradation(HAM, stint 2)".
+  - `tool_calls`: list of `{name, args, ok}` so the UI can show "Ran fit_degradation(HAM, stint 2)"
+    and distinguish a failed call (`ok: false`, e.g. "fit_degradation failed: too few clean laps") from a
+    successful one.
 - `GET /plots/{filename}` serves saved PNGs via `StaticFiles`.
 
 ### Agent

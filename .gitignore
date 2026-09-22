@@ -13,3 +13,6 @@ plots/
 # frontend (later phases)
 node_modules/
 .next/
+
+# Claude Code's own local session config, not project code
+.claude/

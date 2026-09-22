@@ -1,6 +1,15 @@
 # Full pip freeze from the dev .venv, so the Docker build in Phase 4 gets an
 # exact match instead of "whatever pip resolves on the day" (fastf1's
 # dependency tree has broken before on minor version bumps).
+#
+# What we actually chose (everything else below is transitive):
+#   fastapi, uvicorn[standard]  - web framework and ASGI server
+#   google-genai                - Gemini client + automatic function calling
+#   fastf1                      - race data
+#   pandas, numpy               - lap/stint data wrangling
+#   statsmodels                 - OLS fit for fit_degradation
+#   matplotlib                  - degradation plots
+#   python-dotenv               - loads backend/.env for local dev
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
