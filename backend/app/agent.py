@@ -11,6 +11,7 @@ import inspect
 import os
 import threading
 import time
+from datetime import datetime, timezone
 
 from google import genai
 from google.genai import errors, types
@@ -23,9 +24,27 @@ SESSION_TTL_SECONDS = 30 * 60
 MAX_SESSIONS = 200
 MAX_MESSAGES_PER_SESSION = 30
 
+# One /api/chat call can trigger several underlying Gemini requests -- one to
+# decide on tool calls, one per tool round, one more for the final text -- so
+# this is a cap on remote *rounds* within a single reply, not on the reply
+# itself. 10 is the SDK's own default; we cut it down so one confused or
+# adversarial prompt can't spend a large chunk of the daily quota by looping
+# through every tool repeatedly.
+MAX_TOOL_CALLS_PER_MESSAGE = int(os.environ.get("MAX_TOOL_CALLS_PER_MESSAGE", "6"))
+
+# A global cap on /api/chat calls (not on the underlying Gemini requests they
+# cause, which run higher -- see MAX_TOOL_CALLS_PER_MESSAGE above), so the
+# whole demo fails friendly before Google's own free-tier quota errors do.
+# Best-effort only: this counter is in-memory, so a Render free-tier restart
+# (a cold spin-down, or a deploy) resets it early. There's no database in
+# this app to persist it in, and CLAUDE.md says to keep it that way for v1.
+# The default is a conservative placeholder -- tune it once you know your
+# chosen Flash-Lite model's actual free-tier daily request limit.
+DAILY_REQUEST_CAP = int(os.environ.get("DAILY_REQUEST_CAP", "150"))
+
 
 class QuotaExceeded(Exception):
-    """Google's free-tier quota (or, once Phase 3 adds it, our own daily cap) was hit."""
+    """Google's free-tier quota, or our own daily request cap, was hit."""
 
 
 class SessionLimitReached(Exception):
@@ -123,8 +142,29 @@ def _new_chat():
             system_instruction=_system_instruction(),
             tools=TOOLS,
             temperature=0.2,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                maximum_remote_calls=MAX_TOOL_CALLS_PER_MESSAGE
+            ),
         ),
     )
+
+
+# ---- daily request cap --------------------------------------------------
+_daily_guard = threading.Lock()
+_daily_count = 0
+_daily_reset_date = None  # a date.today() (UTC) marker
+
+
+def _check_daily_cap():
+    global _daily_count, _daily_reset_date
+    today = datetime.now(timezone.utc).date()
+    with _daily_guard:
+        if _daily_reset_date != today:
+            _daily_reset_date = today
+            _daily_count = 0
+        if _daily_count >= DAILY_REQUEST_CAP:
+            raise QuotaExceeded("The demo is busy right now. Please try again tomorrow.")
+        _daily_count += 1
 
 
 class _SessionEntry:
@@ -166,6 +206,7 @@ def send_message(session_id, message):
     Returns (reply_text, tool_calls, plots). Raises SessionLimitReached,
     QuotaExceeded or AgentNotConfigured on the friendly-error paths.
     """
+    _check_daily_cap()  # before touching sessions/Gemini at all, once we're capped
     entry = _get_or_create_session(session_id)
     if entry.message_count >= MAX_MESSAGES_PER_SESSION:
         raise SessionLimitReached(
