@@ -12,6 +12,7 @@ it) never reaches fastf1.get_session with attacker-influenced text.
 """
 import os
 import threading
+from collections import OrderedDict
 
 import matplotlib
 
@@ -33,12 +34,26 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(PLOT_DIR, exist_ok=True)
 fastf1.Cache.enable_cache(CACHE_DIR)
 
-_sessions = {}
-# One lock per (year, race) key, so two concurrent requests for the same
-# not-yet-cached race wait for the first download instead of both starting
-# one. FastAPI runs these blocking tool functions in a threadpool, so this
-# is a real possibility, not just a theoretical one, once more than one
+# Measured on the dev machine: importing fastf1/pandas/matplotlib/statsmodels
+# costs ~185MB by itself, and each additionally *cached* race session on top
+# of that costs only ~2-12MB (loaded with telemetry=False, weather=False,
+# messages=False, so it's just the laps/results tables, not full telemetry).
+# All 4 allowed races cached at once measured at ~221MB total, comfortably
+# under Render free tier's 512MB -- so per CLAUDE.md's own conditional
+# ("reduce the cache to 1 if it gets close"), 2 stays the default; it isn't
+# close. Override with SESSION_CACHE_SIZE if that ever changes (more allowed
+# races, a smaller instance, etc).
+SESSION_CACHE_SIZE = int(os.environ.get("SESSION_CACHE_SIZE", "2"))
+
+# An OrderedDict used as an LRU: move_to_end() on access, evict from the
+# front once over SESSION_CACHE_SIZE. _sessions_guard protects the dict and
+# its ordering; _session_locks (below) is separate and serializes the actual
+# download+parse of one not-yet-cached race so two concurrent requests for
+# it don't both trigger a download -- FastAPI runs these blocking tool
+# functions in a threadpool, so that's a real possibility once more than one
 # visitor can hit the backend at once.
+_sessions: "OrderedDict" = OrderedDict()
+_sessions_guard = threading.Lock()
 _session_locks = {}
 _locks_guard = threading.Lock()
 
@@ -54,11 +69,15 @@ def _lock_for(key):
 
 def _load(year, race):
     key = (year, race.lower())
-    if key in _sessions:
-        return _sessions[key]
-    with _lock_for(key):
-        if key in _sessions:  # someone else loaded it while we waited
+    with _sessions_guard:
+        if key in _sessions:
+            _sessions.move_to_end(key)
             return _sessions[key]
+    with _lock_for(key):
+        with _sessions_guard:
+            if key in _sessions:  # someone else loaded it while we waited
+                _sessions.move_to_end(key)
+                return _sessions[key]
         s = fastf1.get_session(year, race, "R")
         # get_session fuzzy-matches, so a typo can silently return a different
         # race. Callers are expected to pass an already-validated canonical
@@ -68,7 +87,11 @@ def _load(year, race):
         if not any(race.lower() in n for n in names):
             raise ValueError(f"Could not find a race matching '{race}' in {year}.")
         s.load(telemetry=False, weather=False, messages=False)
-        _sessions[key] = s
+        with _sessions_guard:
+            _sessions[key] = s
+            _sessions.move_to_end(key)
+            while len(_sessions) > SESSION_CACHE_SIZE:
+                _sessions.popitem(last=False)
         return s
 
 
