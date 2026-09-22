@@ -96,6 +96,8 @@ def _system_instruction():
         "- When you report degradation, mention the caveat returned by the tool, and mention every "
         'item in its "warnings" list if it is non-empty (for example a weak fit or a small sample).\n'
         "- If a plot was saved, mention that a plot is attached; do not recite the raw file path.\n"
+        "- Write plain text, not LaTeX or markdown math notation (no $...$). Say \"R-squared\" or "
+        '"R^2", never "$R^2$".\n'
         "- Keep answers short and concrete."
     )
 
