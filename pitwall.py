@@ -120,6 +120,42 @@ def _int(x):
     return int(x) if pd.notna(x) else None
 
 
+def _degradation_warnings(laps, x, y, fit, raw_slope):
+    """Flag fits that likely don't reflect real tyre wear, so the LLM can
+    surface the caveat instead of reading the slope at face value."""
+    warnings = []
+
+    if len(laps) < 10:
+        warnings.append(f"Only {len(laps)} clean laps in this stint; the fit rests on a small sample.")
+
+    if fit.rsquared < 0.3:
+        warnings.append(
+            f"Weak fit (R^2={fit.rsquared:.2f}): tyre age alone explains little of the lap time variation."
+        )
+
+    std_err = float(fit.bse["TyreLife"])
+    if std_err > 0 and abs(raw_slope) < 2 * std_err:
+        warnings.append(
+            "The slope is not statistically distinguishable from zero (its standard error is "
+            "large relative to its size)."
+        )
+
+    # A stint's last clean lap being much slower than the rest is usually a missed
+    # in-lap, fuel-saving, or a car being held up late on, not tyre wear.
+    order = x.argsort()
+    y_sorted = y.iloc[order].to_numpy()
+    if len(y_sorted) >= 4:
+        last, rest_median = y_sorted[-1], float(pd.Series(y_sorted[:-1]).median())
+        if last - rest_median > 1.0:
+            warnings.append(
+                f"The last lap of this stint ({last:.2f}s) is {last - rest_median:.1f}s slower than "
+                "the rest of the stint, which usually means a missed in-lap or fuel saving, not "
+                "tyre wear."
+            )
+
+    return warnings
+
+
 # ------------------------------------------------------------------ tools
 def get_stints(year: int, race: str, driver: str) -> dict:
     """List a driver's tyre stints in a race.
@@ -172,6 +208,7 @@ def fit_degradation(year: int, race: str, driver: str, stint: int) -> dict:
         x = laps["TyreLife"].astype(float)
         fit = sm.OLS(y, sm.add_constant(x)).fit()
         raw = float(fit.params["TyreLife"])
+        warnings = _degradation_warnings(laps, x, y, fit, raw)
 
         fig, ax = plt.subplots(figsize=(7, 4))
         ax.scatter(x, y, s=18)
@@ -195,6 +232,7 @@ def fit_degradation(year: int, race: str, driver: str, stint: int) -> dict:
             "slope_std_error": round(float(fit.bse["TyreLife"]), 4),
             "r_squared": round(float(fit.rsquared), 3),
             "plot_saved_to": path,
+            "warnings": warnings,
             "caveat": (
                 "Within one stint, tyre age and fuel load move together, so they cannot be "
                 f"separated statistically. The fuel-corrected figure assumes {FUEL_EFFECT_S_PER_LAP} "
@@ -255,7 +293,8 @@ using ONLY the results of the tools you are given. Rules:
 - Use three-letter driver codes (VER, HAM, NOR...) when calling tools.
 - If the year or race is missing from the question, ask for it before calling tools.
 - Never invent lap times, strategies or causes. If the tool data cannot support a claim, say so.
-- When you report degradation, mention the caveat returned by the tool.
+- When you report degradation, mention the caveat returned by the tool, and mention every
+  item in its "warnings" list if it is non-empty (for example a weak fit or a small sample).
 - If a plot was saved, tell the user the file path.
 - Keep answers short and concrete."""
 
