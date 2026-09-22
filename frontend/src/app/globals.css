@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-slate-950);
+}
+
+/* Thin, unobtrusive scrollbar for the message list -- the default one looks
+   out of place against a dark, otherwise-chrome-free chat surface. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-slate-700) transparent;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--color-slate-700);
+  border-radius: 9999px;
+}
