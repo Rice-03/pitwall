@@ -1,0 +1,15 @@
+# Secrets -- never bake these into an image that might end up in a registry.
+.env
+.env.example
+
+# The dev-machine FastF1 cache and any locally-generated plots. preload.py
+# builds a fresh cache inside the image during the build instead; copying
+# the local one in would be redundant and could bake in stale data.
+f1_cache/
+plots/
+
+__pycache__/
+*.pyc
+
+# Not needed at runtime.
+smoke_test_tools.py
